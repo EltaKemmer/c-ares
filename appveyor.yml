@@ -1,0 +1,142 @@
+# Copyright (C) The c-ares project and its contributors
+# SPDX-License-Identifier: MIT
+
+image: Visual Studio 2022
+
+# Github/Bitbucket only: get source code for one particular commit as zip archive, instead of git clone'ing.
+shallow_clone: true
+
+# Github/Bitbucket only: per-file commit filtering
+skip_commits:
+  files:
+    - .gitignore
+    - '**/*.md'
+    - .travis.yml
+    - .cirrus.yml
+    - '.github/**'
+
+# List of build configurations to test.
+configuration:
+  - RelWithDebInfo
+
+# Note: You can set extra cmake args for a particular matrix entry with CMAKE_EXTRA_OPTIONS. For example:
+#     CMAKE_EXTRA_OPTIONS: -DOPENSSL_ROOT_DIR=C:/OpenSSL-Win32
+environment:
+  matrix:
+    # MSVC 2022, UWP (cmake)
+    - COMPILER: MSVC
+      BUILDTOOL: CMAKE
+      TESTTYPE: NONE
+      MSVC_SETUP_ARG: x64 store 10.0.22621.0
+      MSVC_SETUP_PATH: C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat
+      CMAKE_EXTRA_OPTIONS: -DCMAKE_SYSTEM_NAME=WindowsStore -DCMAKE_SYSTEM_VERSION=10.0 -A x64
+      TESTDIRSUFFIX: Release\
+
+    # MinGW via MSYS2 (latest version)
+    - COMPILER: MINGW
+      BUILDTOOL: MSYS2
+      TESTTYPE: MSYS2
+      MSYSTEM: MINGW64
+      CHERE_INVOKING: YES
+
+    # MSVC 2022, 32-bit x86 (cmake)
+    - COMPILER: MSVC
+      BUILDTOOL: CMAKE
+      TESTTYPE: CMAKE
+      MSVC_SETUP_ARG: x86
+      MSVC_SETUP_PATH: C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars32.bat
+      CMAKE_EXTRA_OPTIONS: -GNinja
+
+    # MSVC 2022, 64-bit x86 (cmake)
+    - COMPILER: MSVC
+      BUILDTOOL: CMAKE
+      TESTTYPE: CMAKE
+      MSVC_SETUP_ARG: x64
+      MSVC_SETUP_PATH: C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
+      CMAKE_EXTRA_OPTIONS: -GNinja
+
+    # MinGW, 32-bit x86 (cmake)
+    - COMPILER: MINGW
+      BUILDTOOL: CMAKE
+      TESTTYPE: CMAKE
+      PATH: C:\mingw-w64\i686-8.1.0-posix-dwarf-rt_v6-rev0\mingw32\bin;%PATH%
+      CMAKE_EXTRA_OPTIONS: -GNinja
+
+    # MinGW, 32-bit x86 (cmake static only)
+    - COMPILER: MINGW
+      BUILDTOOL: CMAKE
+      TESTTYPE: CMAKE
+      PATH: C:\mingw-w64\i686-8.1.0-posix-dwarf-rt_v6-rev0\mingw32\bin;%PATH%
+      CMAKE_EXTRA_OPTIONS: -DCARES_SHARED=OFF -GNinja
+
+    # MSVC 2022, 32-bit x86 (nmake)
+    - COMPILER: MSVC
+      BUILDTOOL: NMAKE
+      TESTTYPE: NMAKE
+      MSVC_SETUP_ARG: x86
+      MSVC_SETUP_PATH: C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars32.bat
+
+    # MSVC 2022, 64-bit x86 (nmake)
+    - COMPILER: MSVC
+      BUILDTOOL: NMAKE
+      TESTTYPE: NMAKE
+      MSVC_SETUP_ARG: x64
+      MSVC_SETUP_PATH: C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
+
+    # MinGW, 32-bit x86 (makefiles)
+    - COMPILER: MINGW
+      BUILDTOOL: MAKE
+      TESTTYPE: MAKE
+      PATH: C:\mingw-w64\i686-8.1.0-posix-dwarf-rt_v6-rev0\mingw32\bin;%PATH%
+
+install:
+  - if "%COMPILER%" == "MINGW" rename "C:\Program Files\Git\usr\bin\sh.exe" "sh2.exe"
+
+before_build:
+  # Setup build environment for the selected compiler (not all compilers need to do anything here).
+  #  -- Visual Studio --
+  - if "%COMPILER%" == "MSVC" call "%MSVC_SETUP_PATH%" %MSVC_SETUP_ARG%
+  - if "%BUILDTOOL%" == "MSYS2" C:\msys64\usr\bin\bash -lc "pacman --noconfirm -Syuu"
+  - if "%BUILDTOOL%" == "MSYS2" C:\msys64\usr\bin\bash -lc "pacman --noconfirm -Syu git mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-check mingw-w64-x86_64-ninja"
+
+build_script:
+  - if "%BUILDTOOL%" == "MSYS2" C:\msys64\usr\bin\bash -lc "cmake -GNinja -DCMAKE_BUILD_TYPE=%configuration% -DCMAKE_INSTALL_PREFIX=C:/projects/build-cares/test_install -DCARES_STATIC=ON -DCARES_STATIC_PIC=ON -DCARES_BUILD_TESTS=ON %CMAKE_EXTRA_OPTIONS% ."
+  - if "%BUILDTOOL%" == "MSYS2" C:\msys64\usr\bin\bash -lc "ninja -v install"
+  - if "%BUILDTOOL%" == "NMAKE" copy .\include\ares_build.h.dist .\include\ares_build.h
+  - if "%BUILDTOOL%" == "NMAKE" nmake /NOLOGO /f .\Makefile.msvc
+  - if "%BUILDTOOL%" == "CMAKE" cmake -DCMAKE_BUILD_TYPE=%configuration% -DCMAKE_INSTALL_PREFIX=C:\projects\build-cares\test_install -DCARES_STATIC=ON -DCARES_STATIC_PIC=ON -DCARES_BUILD_TESTS=ON %CMAKE_EXTRA_OPTIONS% -Bbuild
+  - if "%BUILDTOOL%" == "CMAKE" cmake --build build --config Release
+  - if "%BUILDTOOL%" == "CMAKE" cmake --install build --config Release
+  - if "%BUILDTOOL%" == "MAKE" copy .\include\ares_build.h.dist .\include\ares_build.h
+  - if "%BUILDTOOL%" == "MAKE" mingw32-make.exe -f Makefile.m32 demos
+
+test_script:
+  # We can't use powershell for tests due to treating stderr as an error
+  - if "%TESTTYPE%" == "MSYS2" C:\msys64\usr\bin\bash -lc "./bin/adig.exe www.google.com"
+  - if "%TESTTYPE%" == "MSYS2" C:\msys64\usr\bin\bash -lc "./bin/ahost.exe www.google.com"
+  - if "%TESTTYPE%" == "MSYS2" C:\msys64\usr\bin\bash -lc "./bin/arestest.exe -4 -v --gtest_filter=-*LiveSearchTXT*:*LiveSearchANY*:*LiveGetLocalhostByAddr*"
+  - if "%TESTTYPE%" == "NMAKE" cd test
+  - if "%TESTTYPE%" == "NMAKE" nmake /NOLOGO /f .\Makefile.msvc vtest
+  - if "%TESTTYPE%" == "NMAKE" nmake /NOLOGO /f .\Makefile.msvc aresfuzz aresfuzzname dnsdump
+  - if "%TESTTYPE%" == "NMAKE" .\msvc\arestest\lib-debug\dnsdump.exe fuzzinput\answer_a fuzzinput\answer_aaaa
+  - if "%TESTTYPE%" == "MAKE" cd test
+  - if "%TESTTYPE%" == "MAKE" mingw32-make.exe -f Makefile.m32
+  - if "%TESTTYPE%" == "MAKE" mingw32-make.exe -f Makefile.m32 aresfuzz.exe aresfuzzname.exe dnsdump.exe
+  - if "%TESTTYPE%" == "MAKE" .\dnsdump.exe fuzzinput\answer_a fuzzinput\answer_aaaa
+  - if "%TESTTYPE%" == "CMAKE" cd build\bin\%TESTDIRSUFFIX%
+  - if "%TESTTYPE%" == "CMAKE" .\adig.exe www.google.com
+  - if "%TESTTYPE%" == "CMAKE" .\ahost.exe www.google.com
+  - if "%TESTTYPE%" == "CMAKE" .\arestest.exe -4 -v --gtest_filter=-*LiveSearchTXT*:*LiveSearchANY*:*LiveGetLocalhostByAddr*
+  - if "%TESTTYPE%" == "CMAKE" .\dnsdump.exe "%APPVEYOR_BUILD_FOLDER%\test\fuzzinput\answer_a" "%APPVEYOR_BUILD_FOLDER%\test\fuzzinput\answer_aaaa"
+
+#on_finish:
+#  - cd C:\projects\build-cares\test
+#  - dir /B *.log > list.txt
+#  - cmake -E tar cfv all_tests.zip --format=zip --files-from=list.txt
+#  - appveyor PushArtifact all_tests.zip
+#  - ps: $blockRdp = $true; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))
+# Force build worker to stay open after build is done, so we can RDP into it.
+
+# Enable RDP connections into build worker.
+#init:
+#  - ps: iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))
